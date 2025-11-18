@@ -1,0 +1,35 @@
+# Python / env
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Data and outputs
+data/
+data/raw/
+data/processed/
+outputs/
+checkpoints/
+models/
+
+# Hugging Face cache
+.cache/
+.cache/huggingface/
+.hf/
+.huggingface/
+
+# IDE/editor
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.pem
+*.key
