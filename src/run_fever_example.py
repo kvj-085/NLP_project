@@ -14,7 +14,7 @@ Note: install dependencies in `requirements.txt` first.
 """
 from datasets import load_from_disk
 from src.data_preprocessing import prepare_fever_dataset
-from src.train import run_training
+from src.models.train import run_training
 from datasets import DatasetDict
 import numpy as np
 import os

@@ -2,7 +2,7 @@
 Simple baseline runner: TF-IDF + Logistic Regression / SVM / RandomForest
 
 Usage:
-    from src.baselines import run_baselines
+    from src.baselines.baselines import run_baselines
     run_baselines(processed_data_dir='data/processed/fever', sample_per_class=200)
 
 Outputs: prints metrics and saves `outputs/baselines_results.csv`.

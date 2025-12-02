@@ -33,3 +33,19 @@ Thumbs.db
 .env
 *.pem
 *.key
+
+# Local tokenized dataset zip (do not commit)
+fever_tokenized_distilbert.zip
+
+# Data and processed artifacts (do not commit)
+data/
+data/raw/
+data/processed/
+outputs/
+checkpoints/
+models/
+
+# Local virtual envs
+.venv/
+venv/
+env/
