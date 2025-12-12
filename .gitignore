@@ -45,6 +45,10 @@ outputs/
 checkpoints/
 models/
 
+# Allow committing `src/models` (we ignore top-level/other models folders but keep src models)
+!src/models/
+!src/models/**
+
 # Local virtual envs
 .venv/
 venv/

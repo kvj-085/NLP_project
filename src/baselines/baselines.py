@@ -17,7 +17,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, f1_score, classification_report
 import csv
 
-
+# Checks if the split has a 'text' column — if yes, use it otherwise fallback to 'claim' col. (text = claim [SEP] evidence.)
+# Converts labels to a NumPy array.
 def _get_texts_labels(split):
     if 'text' in split.column_names:
         texts = list(split['text'])
@@ -26,6 +27,12 @@ def _get_texts_labels(split):
     labels = np.array(split['label'] if 'label' in split.column_names else split['labels'])
     return texts, labels
 
+
+
+# It loops through every text/label pair and discards:
+# None values
+# empty strings " "
+# labels that cannot be converted to integers
 
 def _filter_nonempty(texts, labels):
     # keep only examples with non-empty text and valid label
@@ -51,6 +58,7 @@ def _filter_nonempty(texts, labels):
 
 def run_baselines(processed_data_dir: str = 'data/processed/fever', sample_limit: int = None):
     os.makedirs('outputs', exist_ok=True)
+    # loads your FEVER dataset (train/val/test splits)
     ds = load_from_disk(processed_data_dir)
 
     train_texts, train_labels = _get_texts_labels(ds['train'])
@@ -78,7 +86,7 @@ def run_baselines(processed_data_dir: str = 'data/processed/fever', sample_limit
 
     if not train_texts:
         raise ValueError('No training texts available after filtering empty examples. Check processed dataset.')
-
+    # TF-IDF vectorization
     vec = TfidfVectorizer(max_features=5000, ngram_range=(1,2), token_pattern=r"(?u)\b\w+\b", min_df=1)
     try:
         X_train = vec.fit_transform(train_texts)
@@ -86,7 +94,7 @@ def run_baselines(processed_data_dir: str = 'data/processed/fever', sample_limit
         raise RuntimeError(f"TfidfVectorizer failed: {e}. Sample of training texts: {train_texts[:5]}") from e
     _ = vec.transform(val_texts)
     X_test = vec.transform(test_texts)
-
+    # Define the classifiers
     classifiers = {
         'LogisticRegression': LogisticRegression(multi_class='multinomial', solver='saga', max_iter=1000, random_state=42),
         'SVM': SVC(kernel='linear', probability=True),
@@ -107,6 +115,9 @@ def run_baselines(processed_data_dir: str = 'data/processed/fever', sample_limit
         X_eval = X_test
         eval_labels = test_labels
 
+    # Training loop: Train on TF-IDF vectors, Predict on evaluation set,
+    # Compute accuracy + macro-F1, Print classification report, Store results
+    
     results = []
     for name, clf in classifiers.items():
         print(f'--- Training {name} ---')

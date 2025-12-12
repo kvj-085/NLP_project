@@ -3,7 +3,7 @@ from datasets import load_dataset, DatasetDict
 import os
 from typing import Optional, Dict, Any
 
-
+# converts FEVER’s string labels into numeric IDs
 FEVER_LABEL_MAP = {
     'SUPPORTS': 0,
     'REFUTES': 1,
@@ -11,6 +11,15 @@ FEVER_LABEL_MAP = {
     'NOT_ENOUGH_INFO': 2,
 }
 
+# FEVER dataset stores evidence in different inconsistent formats depending on version. 
+# This helper function:
+# Handles when evidence is a list
+# Handles nested lists
+# Handles dictionaries containing "text"
+# Handles cases where evidence is stored as wiki title + sentence index
+# Falls back to strings if necessary
+
+# Joins all evidence pieces into one single string ie, text = claim + [SEP] + evidence
 
 def _extract_evidence_text(example: Dict[str, Any]) -> str:
     """Robustly extract evidence text from a FEVER example.
@@ -65,234 +74,8 @@ def _extract_evidence_text(example: Dict[str, Any]) -> str:
     return ''
 
 
-def prepare_fever_dataset(dataset_name: Optional[str] = 'fever',
-                          local_path: Optional[str] = None,
-                          out_dir: str = 'data/processed/fever',
-                          split_ratio=(0.7, 0.15, 0.15),
-                          label_map: Dict[str, int] = FEVER_LABEL_MAP):
-    """Load FEVER dataset (HF id `fever` or a local CSV) and produce a `text` + `label` dataset.
-
-    By default this function splits data into `train`, `validation`, `test` with a
-    70:15:15 ratio (you can override `split_ratio`). Each example will have fields
-    `text` (concatenation of claim and evidence) and `label` (int).
-    """
-    os.makedirs(out_dir, exist_ok=True)
-    # Ensure HF cache directory is explicit to avoid dataset script files being
-    # written into the current working directory on some Windows setups.
-    hf_user = os.environ.get('USERPROFILE') or os.environ.get('HOME') or '.'
-    hf_cache = os.path.join(hf_user, '.cache', 'huggingface', 'datasets')
-    os.makedirs(hf_cache, exist_ok=True)
-
-    import tempfile
-    import shutil
-
-    # If local_path is provided, resolve any relative paths to absolute paths
-    if local_path:
-        def _absify_paths(lp):
-            if isinstance(lp, str):
-                return os.path.abspath(lp)
-            if isinstance(lp, dict):
-                return {k: os.path.abspath(v) for k, v in lp.items()}
-            if isinstance(lp, (list, tuple)):
-                return [os.path.abspath(v) for v in lp]
-            return lp
-
-        try:
-            local_path = _absify_paths(local_path)
-        except Exception:
-            pass
-
-    # Run load_dataset from a temporary working directory so the dataset
-    # script files are not written into the project root on Windows.
-    tmp_cwd = tempfile.mkdtemp(prefix='hf_tmp_cwd_')
-    orig_cwd = os.getcwd()
-    try:
-        os.chdir(tmp_cwd)
-        # Use a temporary cache directory for this download to avoid reusing
-        # a possibly-broken cached snapshot that contains dataset scripts.
-        tmp_cache = tempfile.mkdtemp(prefix='hf_cache_')
-        try:
-            if dataset_name and not local_path:
-                ds = load_dataset(dataset_name, cache_dir=tmp_cache)
-            elif local_path and not dataset_name:
-                # detect local file format and call appropriate loader
-                lp = local_path
-
-                def _load_jsonl_file(path):
-                    import json as _json
-                    texts = []
-                    labels = []
-                    with open(path, 'r', encoding='utf-8') as fh:
-                        for line in fh:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                obj = _json.loads(line)
-                            except Exception:
-                                # skip malformed lines
-                                continue
-                            # build text and label robustly
-                            claim = obj.get('claim') or obj.get('sentence') or ''
-                            evidence_text = _extract_evidence_text(obj)
-                            if evidence_text:
-                                text = f"{claim} [SEP] {evidence_text}"
-                            else:
-                                text = claim
-                            label = obj.get('label')
-                            if isinstance(label, str):
-                                label = label.strip()
-                                label = label if label in label_map else label.replace('_', ' ')
-                                label_id = label_map.get(label, -1)
-                            else:
-                                try:
-                                    label_id = int(label) if label is not None else -1
-                                except Exception:
-                                    label_id = -1
-                            texts.append(text)
-                            labels.append(label_id)
-                    return Dataset.from_dict({'text': texts, 'label': labels})
-
-                def _load_single_path(path):
-                    path_lower = path.lower()
-                    if path_lower.endswith(('.jsonl', '.ndjson')):
-                        return _load_jsonl_file(path)
-                    if path_lower.endswith('.json'):
-                        # try as JSON array, otherwise fallback to JSONL
-                        try:
-                            import json as _json
-                            with open(path, 'r', encoding='utf-8') as fh:
-                                content = fh.read()
-                            parsed = _json.loads(content)
-                            if isinstance(parsed, list):
-                                return Dataset.from_list(parsed)
-                            # not a list -> fallback to line-by-line
-                        except Exception:
-                            pass
-                        return _load_jsonl_file(path)
-                    if path_lower.endswith(('.csv', '.tsv')):
-                        return load_dataset('csv', data_files=path, cache_dir=tmp_cache)
-                    # fallback: try jsonl then csv
-                    try:
-                        return _load_jsonl_file(path)
-                    except Exception:
-                        return load_dataset('csv', data_files=path, cache_dir=tmp_cache)
-
-                if isinstance(lp, str):
-                    ds = _load_single_path(lp)
-                elif isinstance(lp, dict):
-                    parts = {}
-                    for k, v in lp.items():
-                        parts[k] = _load_single_path(v)
-                    # If datasets returned are plain Dataset objects, combine into DatasetDict
-                    dataset = DatasetDict()
-                    for k, d in parts.items():
-                        if isinstance(d, Dataset):
-                            dataset[k] = d
-                        else:
-                            # if load_dataset returned a DatasetDict for csv loader
-                            # try to assign sensible split
-                            if 'train' in d:
-                                dataset[k] = d['train']
-                            else:
-                                # assign first split
-                                dataset[k] = d[list(d.keys())[0]]
-                    ds = dataset
-                else:
-                    # pass through lists/other types to datasets loader
-                    ds = load_dataset('json', data_files=lp, cache_dir=tmp_cache)
-            else:
-                raise ValueError('Provide either dataset_name (HF id) or local_path (CSV/TSV/JSON)')
-        except RuntimeError as e:
-            # Debug: print workspace/cache contents to locate where `fever.py` is created
-            try:
-                print('\n--- DEBUG: dataset load failed, inspecting temp dirs ---')
-                print('tmp_cwd:', tmp_cwd)
-                print('tmp_cwd contents:', os.listdir(tmp_cwd))
-                print('tmp_cache:', tmp_cache)
-                try:
-                    print('tmp_cache contents (top-level):', os.listdir(tmp_cache))
-                except Exception as _:
-                    print('tmp_cache not readable or empty')
-                print('cwd after load attempt:', os.getcwd())
-                # show HF hub cache location too
-                hf_hub = os.path.join(hf_user, '.cache', 'huggingface', 'hub')
-                print('hf hub cache sample contents (top-level):')
-                try:
-                    print(os.listdir(hf_hub)[:20])
-                except Exception:
-                    print('cannot list hf hub cache')
-                print('--- END DEBUG ---\n')
-            except Exception:
-                pass
-
-            # If load_dataset failed due to dataset script issues, attempt
-            # to fetch raw files directly from the Hub as a fallback.
-            try:
-                print('Attempting HF Hub raw-file download fallback (hf_hub_download).')
-                return prepare_fever_via_hf_hub(out_dir=out_dir, split_ratio=split_ratio, label_map=label_map)
-            except Exception:
-                # Provide a clearer hint for the common Windows issue if fallback fails
-                msg = str(e)
-                if ('found ' in msg and msg.strip().endswith('.py')) or 'fever.py' in msg:
-                    raise RuntimeError(
-                        msg + '\n\nHint: remove any local `fever.py` (or similarly named) files from the project folder and retry,\n'
-                        'or set a custom HF cache directory via the HF_DATASETS_CACHE env var.') from e
-                raise
-        finally:
-            # remove temporary cache to avoid leaving large files behind
-            try:
-                shutil.rmtree(tmp_cache)
-            except Exception:
-                pass
-    finally:
-        os.chdir(orig_cwd)
-        try:
-            shutil.rmtree(tmp_cwd)
-        except Exception:
-            pass
-
-    # Normalize to train/validation/test
-    if 'train' in ds and ('validation' in ds or 'test' in ds):
-        dataset = ds
-    else:
-        # If a single split provided, split according to split_ratio
-        base_split = ds[list(ds.keys())[0]]
-        test_size = split_ratio[1] + split_ratio[2]
-        train_test = base_split.train_test_split(test_size=test_size)
-        test_val = train_test['test'].train_test_split(test_size=split_ratio[2] / (split_ratio[1] + split_ratio[2]))
-        dataset = DatasetDict({'train': train_test['train'], 'validation': test_val['train'], 'test': test_val['test']})
-
-    def normalize(example):
-        claim = example.get('claim') or example.get('sentence') or ''
-        evidence_text = _extract_evidence_text(example)
-        if evidence_text:
-            text = f"{claim} [SEP] {evidence_text}"
-        else:
-            text = claim
-
-        label = example.get('label')
-        if isinstance(label, str):
-            label = label.strip()
-            label = label if label in label_map else label.replace('_', ' ')
-            label_id = label_map.get(label, -1)
-        else:
-            # assume numeric already
-            label_id = int(label) if label is not None else -1
-
-        return {'text': text, 'label': label_id}
-
-    # If the dataset already contains a `text` field (for example when loading
-    # from local JSONL which we parsed into `text`), skip the normalization
-    # mapping to avoid overwriting the precomputed `text` with empty values.
-    sample_split = list(dataset.keys())[0]
-    if 'text' not in dataset[sample_split].column_names:
-        dataset = dataset.map(normalize)
-    # Save processed dataset
-    dataset.save_to_disk(out_dir)
-    return out_dir
-
-
+# we manually download raw FEVER files using the HuggingFace Hub, 
+# parse claim and evidence, normalize them, and save them in the same format.
 def prepare_fever_via_hf_hub(out_dir: str = 'data/processed/fever',
                              repo_id: str = 'fever',
                              repo_type: str = 'dataset',
