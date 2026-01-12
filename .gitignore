@@ -5,13 +5,14 @@ env/
 __pycache__/
 *.pyc
 
-# Data and outputs
+# Data (too large for git)
 data/
 data/raw/
 data/processed/
-outputs/
 checkpoints/
 models/
+
+# Note: outputs/ IS committed (small, only 2-3 MB)
 
 # Hugging Face cache
 .cache/
@@ -41,7 +42,6 @@ fever_tokenized_distilbert.zip
 data/
 data/raw/
 data/processed/
-outputs/
 checkpoints/
 models/
 
